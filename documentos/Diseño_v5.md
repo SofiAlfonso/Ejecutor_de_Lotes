@@ -925,7 +925,13 @@ Se proporciona `tests/test_suite.sh` (y su equivalente `.bat`) que lanza los ser
 
 # Maquinas de estados.
 
-![Captura de pantalla 2026-05-07 210603](../Pictures/Screenshots/Captura%20de%20pantalla%202026-05-07%20210603.png)
-![Captura de pantalla 2026-05-07 210638](../Pictures/Screenshots/Captura%20de%20pantalla%202026-05-07%20210638.png)![Captura de pantalla 2026-05-07 210658](../Pictures/Screenshots/Captura%20de%20pantalla%202026-05-07%20210658.png)
-![Captura de pantalla 2026-05-07 210720](../Pictures/Screenshots/Captura%20de%20pantalla%202026-05-07%20210720.png)
+<img width="427" height="165" alt="image" src="https://github.com/user-attachments/assets/642b86bf-e877-461f-bb4e-03059df54cca" />
+
+<img width="568" height="385" alt="image" src="https://github.com/user-attachments/assets/5ff2da16-066c-4c6d-8ec9-3b26b8a013e9" />
+
+<img width="602" height="386" alt="image" src="https://github.com/user-attachments/assets/1ea55c20-8f08-4dd7-b377-c2e45b68ebf5" />
+
+<img width="602" height="447" alt="image" src="https://github.com/user-attachments/assets/ee2e7112-58e3-4eb3-a801-2be9f7809358" />
+
+
 ---
