@@ -1,7 +1,5 @@
 //go:build windows
 
-// Package common proporciona utilidades compartidas por todos los servicios.
-// BORRADOR: implementación temporal para permitir compilación de gesprog.
 package common
 
 import (
@@ -11,39 +9,49 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// AbrirPipes crea un named pipe full-duplex en Windows y espera a que un cliente se conecte.
-// - pipePeticiones: nombre del pipe (ej: `\\.\pipe\gesprog_pipe`)
-// - pipeRespuestas: se ignora (full-duplex)
-// Retorna dos *os.File que apuntan al mismo pipe (lectura y escritura).
+// AbrirPipes crea un named pipe full-duplex en Windows y espera a que
+// un cliente se conecte.
+//
+// El parámetro pipeRespuestas se ignora porque en Windows un solo pipe
+// sirve para leer y escribir.
+//
+// Uso esperado (servidor):
+//
+//	entrada, salida, err := common.AbrirPipes(`\\.\pipe\gesprog_pipe`, "")
+//
+// Los dos *os.File devueltos apuntan al mismo handle subyacente.
 func AbrirPipes(pipePeticiones, pipeRespuestas string) (*os.File, *os.File, error) {
-	// Convertir nombre de pipe a UTF-16
+	// Convertir el nombre del pipe a UTF-16 (requerido por la API de Windows).
 	pipeName, err := windows.UTF16PtrFromString(pipePeticiones)
 	if err != nil {
-		return nil, nil, fmt.Errorf("AbrirPipes: nombre de pipe inválido: %w", err)
+		return nil, nil, fmt.Errorf("AbrirPipes: nombre de pipe inválido %q: %w", pipePeticiones, err)
 	}
 
-	// Crear el named pipe como servidor
+	// Crear el named pipe como servidor full-duplex.
+	// Se permite una sola instancia simultánea (nMaxInstances = 1) porque
+	// ctrllt es el único cliente que se conecta a cada servicio.
 	handle, err := windows.CreateNamedPipe(
 		pipeName,
 		windows.PIPE_ACCESS_DUPLEX,
-		windows.PIPE_TYPE_MESSAGE|windows.PIPE_READMODE_MESSAGE|windows.PIPE_WAIT,
-		1,    // max instances
-		4096, // output buffer size
-		4096, // input buffer size
-		0,    // default timeout
-		nil,  // security attributes
+		windows.PIPE_TYPE_BYTE|windows.PIPE_READMODE_BYTE|windows.PIPE_WAIT,
+		1,    // máximo de instancias simultáneas
+		4096, // tamaño del búfer de salida
+		4096, // tamaño del búfer de entrada
+		0,    // tiempo de espera predeterminado (50 ms)
+		nil,  // atributos de seguridad predeterminados
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("AbrirPipes: CreateNamedPipe falló: %w", err)
 	}
 
-	// Esperar a que un cliente se conecte (bloqueante)
+	// Esperar a que el cliente se conecte (bloqueante).
 	if err := windows.ConnectNamedPipe(handle, nil); err != nil && err != windows.ERROR_PIPE_CONNECTED {
 		windows.CloseHandle(handle)
 		return nil, nil, fmt.Errorf("AbrirPipes: ConnectNamedPipe falló: %w", err)
 	}
 
-	// Convertir el handle a *os.File para usar con bufio
-	file := os.NewFile(uintptr(handle), pipePeticiones)
-	return file, file, nil
+	// Envolver el handle en un *os.File para poder usar bufio sobre él.
+	f := os.NewFile(uintptr(handle), pipePeticiones)
+	// Devolvemos el mismo archivo para lectura y escritura (full-duplex).
+	return f, f, nil
 }
