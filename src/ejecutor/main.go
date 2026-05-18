@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+
+	"github.com/SofiAlfonso/Ejecutor_de_Lotes/src/common"
 )
 
 // main es el punto de entrada del servicio ejecutor.
@@ -36,6 +38,7 @@ func main() {
 	}
 
 	// Inicializar almacenamiento
+	common.InitIDs(*aralmac)
 	if err := InicializarAlmacenamiento(*aralmac); err != nil {
 		log.Fatalf("ejecutor: error inicializando aralmac: %v", err)
 	}
