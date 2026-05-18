@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/SofiAlfonso/Ejecutor_de_Lotes/src/common"
 )
 
 // rutaAralmac se inicializa desde main.go con el flag -x.
@@ -44,7 +46,7 @@ func Guardar(ejecutablePath string, args, env []string) (string, error) {
 
 	// Generar nuevo ID p-XXXX
 	// TODO: reemplazar por common.GenerarIDPrograma() cuando common/ids.go esté listo
-	id, err := generarIDPrograma()
+	id, err := common.GenerarIDPrograma()
 	if err != nil {
 		return "", fmt.Errorf("no se pudo guardar el programa: %w", err)
 	}
@@ -195,7 +197,3 @@ func copiarArchivo(origen, destino string) error {
 }
 
 // generarIDPrograma produce un nuevo ID p-XXXX.
-// TODO: reemplazar por common.GenerarIDPrograma() cuando common/ids.go esté listo.
-func generarIDPrograma() (string, error) {
-	return "p-0001", nil
-}
