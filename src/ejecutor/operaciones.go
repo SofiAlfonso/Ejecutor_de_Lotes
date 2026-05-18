@@ -74,6 +74,9 @@ func opEjecutar(pet Peticion) []byte {
 	if pet.IDPrograma == "" {
 		return errorJSON("falta campo: id-programa")
 	}
+	if pet.Stdin == "" || pet.Stdout == "" || pet.Stderr == "" {
+		return errorJSON("faltan campos: stdin, stdout, stderr")
+	}
 	idEjecucion, err := LanzarProceso(pet.IDPrograma, pet.Stdin, pet.Stdout, pet.Stderr)
 	if err != nil {
 		return errorJSON(err.Error())
