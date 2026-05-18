@@ -1,27 +1,47 @@
 # common — Utilidades compartidas
 
-Este paquete concentra todo el código que reutilizan los demás componentes (`ctrllt`, `gesfich`, `gesprog`, `ejecutor`). No contiene lógica de negocio.
+Este paquete concentra funcionalidades reutilizables por los demás servicios (`ctrllt`, `gesfich`, `gesprog`, `ejecutor`).
 
-## Archivos previstos
+## Archivos reales
 
-| Archivo      | Responsabilidad                                                                 |
-|--------------|---------------------------------------------------------------------------------|
-| `json.go`    | Serialización/deserialización de mensajes del protocolo (encode/decode JSON+\n) |
-| `pipe.go`    | Creación, apertura, lectura y escritura de named pipes en Linux y Windows 11    |
-| `lock.go`    | Bloqueo exclusivo de archivos (`syscall.Flock` en Linux, `LockFile` en Windows) |
-| `ids.go`     | Generación atómica de identificadores: `f-XXXX` (ficheros), `p-XXXX` (programas), `l-XXXX` (lotes), `cli-XXXX` (clientes, autogenerado por el cliente) |
-| `errors.go`  | Códigos de error estándar del sistema y función de construcción de respuestas de error |
+| Archivo           | Descripción                                                                 |
+|-------------------|-----------------------------------------------------------------------------|
+| `ids.go`          | Generación de identificadores únicos `f-XXXX`, `p-XXXX`, `e-XXXX`.          |
+| `pipe_linux.go`   | Implementación de `AbrirPipes` para Linux (FIFOs half‑duplex).              |
+| `pipe_windows.go` | Implementación de `AbrirPipes` para Windows (named pipe full‑duplex).       |
 
-## Notas de portabilidad
+## Uso
 
-- `pipe.go` y `lock.go` usan build tags (`//go:build linux` / `//go:build windows`) para separar las implementaciones por SO sin duplicar la interfaz pública.
-- `ids.go` protege el acceso al archivo de secuencia con bloqueo exclusivo a nivel de archivo para garantizar unicidad incluso bajo peticiones concurrentes y tras reinicios del servicio.
+### Inicialización
+Cada servicio debe llamar a `common.InitIDs` al arrancar, pasando la ruta raíz del almacenamiento (`aralmac`).  
+Ejemplo:
+```go
+common.InitIDs(*aralmac)
+```
 
-## Secuencias de IDs
+### Generación de IDs
+```go
+idFichero, _ := common.GenerarIDFichero()   // formato f-0001
+idPrograma, _ := common.GenerarIDPrograma() // formato p-0001
+idEjecucion, _ := common.GenerarIDEjecucion() // formato e-0001
+```
+- La generación se basa en escanear los subdirectorios `ficheros/`, `programas/` y `ejecuciones/` dentro de `aralmac`.
+- El número se incrementa automáticamente, asegurando unicidad en el mismo proceso (el mutex `mu` evita carreras en el mismo servicio).
 
-Cada secuencia se almacena en `aralmac/secuencias/` en los archivos `next_fichero.txt`, `next_programa.txt` y `next_lote.txt`. El procedimiento para obtener un nuevo ID:
-1. Abrir el archivo con bloqueo exclusivo (`syscall.Flock` en Linux / `LockFile` en Windows).
-2. Leer el número, incrementarlo, escribirlo de vuelta.
-3. Liberar el bloqueo.
-4. Formatear como `tipo-XXXX` con 4 dígitos (ej. `f-0042`).
-5. Si el archivo no existe, crearlo con valor inicial `1`.
+### Comunicación por pipes
+```go
+entrada, salida, err := common.AbrirPipes(pipePeticiones, pipeRespuestas)
+```
+- **Linux**: se esperan dos nombres de FIFO (half‑duplex). La función los crea si no existen y abre `pipePeticiones` en modo lectura, `pipeRespuestas` en modo escritura. La llamada bloquea hasta que el otro extremo (cliente) abra los FIFOs.
+- **Windows**: se usa un solo pipe full‑duplex. El parámetro `pipeRespuestas` se ignora. La función crea el pipe y espera a que un cliente se conecte (`ConnectNamedPipe`). Devuelve el mismo `*os.File` para lectura y escritura.
+
+Los descriptores devueltos pueden usarse directamente con `bufio.NewScanner` y `bufio.NewWriter`.
+
+## Dependencias
+- Para Windows se requiere `golang.org/x/sys/windows`. Se descarga automáticamente con `go mod tidy`.
+- No hay dependencias adicionales en Linux (solo biblioteca estándar).
+
+## Nota de diseño
+- La generación de IDs **no utiliza bloqueo de archivo** entre procesos diferentes porque cada tipo de ID es generado por un único servicio. La exclusión mutua dentro del mismo proceso se logra con `sync.Mutex`.
+- El servidor (el que llama a `AbrirPipes`) atiende **una sola conexión** y finaliza cuando el cliente cierra el pipe. Esto es suficiente para la arquitectura donde `ctrllt` mantiene la conexión abierta.
+
