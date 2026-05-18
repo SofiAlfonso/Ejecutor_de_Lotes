@@ -1,9 +1,12 @@
-
 # ejecutor — Servicio de ejecución de procesos de lotes
 
 ## Descripción
 
 `ejecutor` lanza procesos de forma independiente en background, administra su ciclo de vida y persiste el estado de cada ejecución en `aralmac/ejecuciones/`. Lee los binarios directamente desde `aralmac/programas/` (gestionados por `gesprog`) y redirige stdin/stdout/stderr desde/hacia ficheros en `aralmac/ficheros/` (gestionados por `gesfich`).
+
+La implementación utiliza el paquete `common` para:
+- Generación de identificadores de ejecución (`e-XXXX`) mediante `common.GenerarIDEjecucion`.
+- Comunicación por pipes nombrados (`common.AbrirPipes`): half‑duplex en Linux (dos FIFOs) y full‑duplex en Windows (un solo pipe).
 
 ## Sinopsis
 
@@ -101,4 +104,78 @@ aralmac/
 ```
 
 El archivo `e-XXXX.json` se escribe dos veces: al lanzar el proceso (estado `Ejecutando`) y al terminar (estado `Terminado` con código de salida).
+
+## Generación de IDs
+
+Los identificadores `e-XXXX` se generan mediante `common.GenerarIDEjecucion()`, que escanea el directorio `aralmac/ejecuciones/` y asigna el siguiente número disponible. La integración con `common` ya está completa (el servicio llama a `common.InitIDs` al arrancar).
+
+## Dependencias
+
+- Solo utiliza la biblioteca estándar de Go, excepto `golang.org/x/sys/windows` (para Windows). Esta dependencia se descarga automáticamente con `go mod tidy`.
+- El paquete `common` (ya implementado) proporciona `AbrirPipes` y `GenerarIDEjecucion`. El servicio llama a `common.InitIDs` al arrancar.
+
+## Compilación y ejecución
+
+### En Linux (WSL)
+
+```bash
+# Compilar
+cd src/ejecutor
+go build -o ejecutor .
+
+# Crear directorio de almacenamiento y FIFOs
+mkdir -p aralmac/ejecuciones aralmac/programas aralmac/ficheros
+mkfifo /tmp/ejecutor_in /tmp/ejecutor_out
+
+# Ejecutar
+./ejecutor -e /tmp/ejecutor_in -d /tmp/ejecutor_out -x ./aralmac
+```
+
+### En Windows (PowerShell como administrador)
+
+```powershell
+# Compilar
+cd src\ejecutor
+go build -o ejecutor.exe
+
+# Crear directorios
+mkdir aralmac\ejecuciones, aralmac\programas, aralmac\ficheros -Force
+
+# Ejecutar (full‑duplex, flag -d opcional)
+.\ejecutor.exe -e \\.\pipe\ejecutor_pipe -x .\aralmac
+```
+
+## Prueba rápida
+
+Una vez el servidor está corriendo, puedes enviar una petición desde otra terminal:
+
+**Linux:**
+```bash
+echo '{"servicio":"ejecutor","operacion":"Ejecutar","id-programa":"p-0001"}' > /tmp/ejecutor_in
+cat /tmp/ejecutor_out
+```
+
+**Windows (PowerShell):**
+```powershell
+$pipe = new-object System.IO.Pipes.NamedPipeClientStream("\\.\pipe\ejecutor_pipe")
+$pipe.Connect()
+$writer = new-object System.IO.StreamWriter($pipe)
+$writer.WriteLine('{"servicio":"ejecutor","operacion":"Ejecutar","id-programa":"p-0001"}')
+$writer.Flush()
+$reader = new-object System.IO.StreamReader($pipe)
+$reader.ReadLine()
+```
+
+La respuesta será algo como: `{"estado":"ok","id-ejecucion":"e-0001"}`.
+
+## Código fuente
+
+Los archivos que componen el servicio son:
+
+- `main.go`         – entrada, parsing de flags, inicialización de `common`.
+- `estado.go`       – máquinas de estados del servicio y de los procesos.
+- `almacenamiento.go` – verificación de programas/ficheros, persistencia de ejecuciones.
+- `operaciones.go`  – despachador de comandos JSON.
+- `proceso.go`      – lanzamiento de pipeline (tuberías anónimas) y `MatarProceso`.
+- `servidor.go`     – bucle de escucha de pipes mediante `common.AbrirPipes`.
 
