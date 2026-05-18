@@ -1,15 +1,23 @@
+¡Perfecto! Ahora que me has mostrado los archivos actualizados de `gesprog` (ya usan `common.GenerarIDPrograma()`, `common.InitIDs` y `common.AbrirPipes`), el siguiente paso es actualizar su `README.md` para reflejar la integración real.  
 
+A continuación te proporciono el contenido **actualizado** para `src/gesprog/README.md`. Puedes copiarlo y reemplazar el archivo existente.
+
+---
+
+```markdown
 # gesprog — Gestor de programas
 
 ## Descripción
 
-`gesprog` es el servicio encargado de registrar, consultar, actualizar, eliminar y ejecutar programas dentro del sistema de lotes.  
-Guarda copias de los ejecutables en el almacenamiento persistente (`aralmac/programas/`) junto con sus metadatos (argumentos y variables de entorno).  
-Asigna identificadores únicos con formato `p-XXXX`.
+`gesprog` es el servicio encargado de registrar, consultar, actualizar, borrar y almacenar programas ejecutables dentro del sistema de lotes.  
+Guarda copias de los binarios en `aralmac/programas/` junto con sus metadatos (argumentos y variables de entorno).  
+Asigna identificadores únicos con formato `p-XXXX` mediante el paquete `common`.
 
 El servicio se comunica exclusivamente a través de **tuberías nombradas** (named pipes / FIFOs).  
 - En **Linux** se usan dos FIFOs (half‑duplex): uno para peticiones (`-p`) y otro para respuestas (`-c`).  
 - En **Windows** se usa un único named pipe full‑duplex (el flag `-c` es opcional).
+
+La implementación utiliza las funciones `common.AbrirPipes` y `common.GenerarIDPrograma` (junto con `common.InitIDs`).
 
 ## Sinopsis
 
@@ -136,8 +144,6 @@ Finaliza el servicio de forma ordenada (cierra pipes y termina el proceso).
 
 ### Respuesta de error
 
-Cualquier operación puede devolver un error con el siguiente formato:
-
 ```json
 {"estado":"error","mensaje":"<descripción del error en español>"}
 ```
@@ -155,7 +161,7 @@ El servicio parte en estado `Corriendo`. Las transiciones válidas son:
 
 En estado `Suspendido`:
 - `Leer` → permitido.
-- Otras operaciones de escritura (`Guardar`, `Actualizar`, `Borrar`, `Suspender`, `Reasumir`, `Terminar`) → error `"servicio suspendido"`.
+- Otras operaciones (`Guardar`, `Actualizar`, `Borrar`, `Suspender`, `Reasumir`, `Terminar`) → error `"servicio suspendido"`.
 
 En estado `Terminado` el proceso finaliza.
 
@@ -172,6 +178,15 @@ aralmac/programas/
 
 - `p-XXXX.bin` : binario ejecutable.
 - `p-XXXX.json` : metadatos en formato JSON, con indentación.
+
+## Generación de IDs
+
+Los identificadores `p-XXXX` se generan automáticamente mediante `common.GenerarIDPrograma()`, que escanea el directorio `aralmac/programas/` y asigna el siguiente número disponible. No se utiliza ningún placeholder; la integración con `common` ya está completa.
+
+## Dependencias
+
+- Solo utiliza la biblioteca estándar de Go, excepto `golang.org/x/sys/windows` (para Windows). Esta dependencia se descarga automáticamente con `go mod tidy`.
+- El paquete `common` (ya implementado) proporciona `AbrirPipes` para la comunicación multiplataforma y `GenerarIDPrograma` para la generación atómica de IDs. El servicio llama a `common.InitIDs` al arrancar.
 
 ## Compilación y ejecución
 
@@ -217,7 +232,7 @@ cat /tmp/gesprog_out
 $pipe = new-object System.IO.Pipes.NamedPipeClientStream("\\.\pipe\gesprog_pipe")
 $pipe.Connect()
 $writer = new-object System.IO.StreamWriter($pipe)
-$writer.WriteLine('{"servicio":"gesprog","operacion":"Guardar","ejecutable":"C:\\Windows\\System32\\calc.exe"}')
+$writer.WriteLine('{"servicio":"gesprog","operacion":"Guardar","ejecutable":"C:\\temp\\test_progs\\p1.exe"}')
 $writer.Flush()
 $reader = new-object System.IO.StreamReader($pipe)
 $reader.ReadLine()
@@ -225,24 +240,13 @@ $reader.ReadLine()
 
 La respuesta será algo como: `{"estado":"ok","id-programa":"p-0001"}`.
 
-## Nota sobre la generación de IDs
-
-Actualmente, la función `generarIDPrograma()` es un **placeholder** que siempre devuelve `"p-0001"`.  
-En la integración final será reemplazada por `common.GenerarIDPrograma()` (proporcionado por el paquete `common` de Ana Sofia), que garantiza IDs únicos mediante bloqueo de archivo.
-
-## Dependencias
-
-- Solo utiliza la biblioteca estándar de Go, excepto `golang.org/x/sys/windows` (para Windows). Esta dependencia se descarga automáticamente con `go mod tidy`.
-- El paquete `common` (en desarrollo por Ana Sofia) provee las funciones `AbrirPipes` para la comunicación multiplataforma. Las implementaciones actuales en `pipe_linux.go` y `pipe_windows.go` son temporales y funcionales.
-
 ## Código fuente
 
 Los archivos que componen el servicio son:
 
-- `main.go`         – punto de entrada, parsing de flags.
+- `main.go`         – punto de entrada, parsing de flags, inicialización de `common`.
 - `estado.go`       – máquina de estados (Corriendo, Suspendido, Terminado).
-- `almacenamiento.go` – operaciones de disco (copiar, guardar, leer, listar, actualizar, borrar).
+- `almacenamiento.go` – operaciones de disco (copiar, guardar, leer, listar, actualizar, borrar). Usa `common.GenerarIDPrograma`.
 - `operaciones.go`  – despachador de comandos JSON, enlace con `estado` y `almacenamiento`.
-- `servidor.go`     – bucle de escucha de pipes, llamada a `ProcesarPeticion`.
+- `servidor.go`     – bucle de escucha de pipes mediante `common.AbrirPipes`.
 
-Todas las funciones y estructuras siguen la **Guía de Estilos** del proyecto (nombres camelCase/PascalCase, comentarios, manejo de errores, concurrencia con mutex).
