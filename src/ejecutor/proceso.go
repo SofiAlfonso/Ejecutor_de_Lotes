@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+
+	"github.com/SofiAlfonso/Ejecutor_de_Lotes/src/common"
 )
 
 // cerrarArchivos cierra una lista de archivos ignorando los nil.
@@ -83,7 +85,7 @@ func LanzarPipeline(idProgramas []string, idStdin, idStdout, idStderr string) (s
 	}
 
 	// Generar id-ejecucion para el grupo
-	idEjecucion, err := generarIDEjecucion()
+	idEjecucion, err := common.GenerarIDEjecucion()
 	if err != nil {
 		cerrarArchivos(archivos)
 		return "", fmt.Errorf("no se pudo ejecutar el programa: %w", err)
