@@ -82,7 +82,7 @@ func ReanudarServicio() error {
 func PararServicio() error {
 	servicio.mu.Lock()
 	defer servicio.mu.Unlock()
-	if servicio.current != estadoEjecutar {
+	if servicio.current != estadoEjecutar && servicio.current != estadoSuspendidos {
 		return fmt.Errorf("transicion invalida")
 	}
 	servicio.current = estadoParando
@@ -117,7 +117,8 @@ type InfoProceso struct {
 	Estado       EstadoProceso
 	CodigoSalida int
 	Terminado    bool
-	Cmd          *exec.Cmd // referencia al proceso del SO, para poder matarlo
+	Cmd          *exec.Cmd   // primer proceso (compatibilidad)
+	Cmds         []*exec.Cmd // todos los procesos del pipeline
 }
 
 // registroProcesos almacena todos los procesos lanzados, indexados por id-ejecucion.
@@ -129,11 +130,13 @@ var (
 )
 
 // RegistrarProceso agrega un nuevo proceso al registro.
-func RegistrarProceso(idEjecucion, idPrograma string) *InfoProceso {
+func RegistrarProceso(idEjecucion, idPrograma string, cmds []*exec.Cmd) *InfoProceso {
 	info := &InfoProceso{
 		IDEjecucion: idEjecucion,
 		IDPrograma:  idPrograma,
 		Estado:      ProcesoEjecutando,
+		Cmd:         cmds[0],
+		Cmds:        cmds,
 	}
 	muProcesos.Lock()
 	registroProcesos[idEjecucion] = info

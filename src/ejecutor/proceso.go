@@ -1,4 +1,3 @@
-// Package main implementa el servicio ejecutor de procesos de lotes.
 package main
 
 import (
@@ -7,108 +6,174 @@ import (
 	"os/exec"
 )
 
-// LanzarProceso inicia un proceso de lotes en background.
-// Verifica que el programa y los ficheros existan, lanza el proceso
-// y devuelve el id-ejecucion inmediatamente sin esperar a que termine.
-func LanzarProceso(idPrograma, idStdin, idStdout, idStderr string) (string, error) {
-	// Verificar que el programa existe en aralmac
-	rutaBin, meta, err := VerificarPrograma(idPrograma)
-	if err != nil {
-		return "", fmt.Errorf("no se pudo ejecutar el programa: %w", err)
+// cerrarArchivos cierra una lista de archivos ignorando los nil.
+func cerrarArchivos(archivos []*os.File) {
+	for _, f := range archivos {
+		if f != nil {
+			f.Close()
+		}
+	}
+}
+
+// LanzarPipeline lanza una cadena de procesos conectados por tuberias anonimas.
+// El stdin del primero viene de idStdin, el stdout del ultimo va a idStdout.
+// El stderr de TODOS va al mismo idStderr.
+// Devuelve un id-ejecucion que representa al grupo completo.
+func LanzarPipeline(idProgramas []string, idStdin, idStdout, idStderr string) (string, error) {
+	if len(idProgramas) == 0 {
+		return "", fmt.Errorf("no se pudo ejecutar el programa: lista de programas vacia")
 	}
 
-	// Generar id-ejecucion
-	idEjecucion, err := generarIDEjecucion()
-	if err != nil {
-		return "", fmt.Errorf("no se pudo ejecutar el programa: %w", err)
+	// Verificar que todos los programas existen antes de abrir ficheros
+	type binMeta struct {
+		ruta string
+		meta metadataPrograma
+	}
+	programas := make([]binMeta, len(idProgramas))
+	for i, id := range idProgramas {
+		ruta, meta, err := VerificarPrograma(id)
+		if err != nil {
+			return "", fmt.Errorf("no se pudo ejecutar el programa: %s: %w", id, err)
+		}
+		programas[i] = binMeta{ruta, meta}
 	}
 
-	// Construir el comando con args y env del programa
-	cmd := exec.Command(rutaBin, meta.Args...)
-	cmd.Env = append(os.Environ(), meta.Env...)
+	// --- Ficheros de E/S (opcionales) ---
+	var fIn, fOut, fErr *os.File
+	var archivos []*os.File
 
-	// archivosAbiertos guarda los archivos abiertos para cerrarlos
-	// en la goroutine monitor, después de que el proceso termine.
-	var archivosAbiertos []*os.File
-
-	// Redirigir stdin si se especificó un fichero
 	if idStdin != "" {
-		rutaStdin, err := VerificarFichero(idStdin)
+		ruta, err := VerificarFichero(idStdin)
 		if err != nil {
 			return "", err
 		}
-		f, err := os.Open(rutaStdin)
+		fIn, err = os.Open(ruta)
 		if err != nil {
 			return "", fmt.Errorf("no se pudo abrir stdin: %w", err)
 		}
-		cmd.Stdin = f
-		archivosAbiertos = append(archivosAbiertos, f)
+		archivos = append(archivos, fIn)
 	}
 
-	// Redirigir stdout si se especificó un fichero
 	if idStdout != "" {
-		rutaStdout, err := VerificarFichero(idStdout)
+		ruta, err := VerificarFichero(idStdout)
 		if err != nil {
+			cerrarArchivos(archivos)
 			return "", err
 		}
-		f, err := os.OpenFile(rutaStdout, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+		fOut, err = os.OpenFile(ruta, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 		if err != nil {
+			cerrarArchivos(archivos)
 			return "", fmt.Errorf("no se pudo abrir stdout: %w", err)
 		}
-		cmd.Stdout = f
-		archivosAbiertos = append(archivosAbiertos, f)
+		archivos = append(archivos, fOut)
 	}
 
-	// Redirigir stderr si se especificó un fichero
 	if idStderr != "" {
-		rutaStderr, err := VerificarFichero(idStderr)
+		ruta, err := VerificarFichero(idStderr)
 		if err != nil {
+			cerrarArchivos(archivos)
 			return "", err
 		}
-		f, err := os.OpenFile(rutaStderr, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+		fErr, err = os.OpenFile(ruta, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 		if err != nil {
+			cerrarArchivos(archivos)
 			return "", fmt.Errorf("no se pudo abrir stderr: %w", err)
 		}
-		cmd.Stderr = f
-		archivosAbiertos = append(archivosAbiertos, f)
+		archivos = append(archivos, fErr)
 	}
 
-	// Registrar el proceso antes de lanzarlo
-	info := RegistrarProceso(idEjecucion, idPrograma)
-
-	// Guardar referencia al cmd para poder matarlo después
-	info.mu.Lock()
-	info.Cmd = cmd
-	info.mu.Unlock()
-
-	// Lanzar el proceso en background
-	if err := cmd.Start(); err != nil {
-		for _, f := range archivosAbiertos {
-			f.Close()
-		}
-		MarcarTerminado(idEjecucion, -1)
+	// Generar id-ejecucion para el grupo
+	idEjecucion, err := generarIDEjecucion()
+	if err != nil {
+		cerrarArchivos(archivos)
 		return "", fmt.Errorf("no se pudo ejecutar el programa: %w", err)
 	}
 
-	// Guardar estado inicial en disco
+	n := len(programas)
+	cmds := make([]*exec.Cmd, n)
+
+	// Construir todos los comandos
+	for i, p := range programas {
+		cmds[i] = exec.Command(p.ruta, p.meta.Args...)
+		cmds[i].Env = append(os.Environ(), p.meta.Env...)
+		// Asignar stderr (puede ser nil si no se abrió)
+		cmds[i].Stderr = fErr
+	}
+
+	// Asignar stdin del primer proceso (si se abrió)
+	if fIn != nil {
+		cmds[0].Stdin = fIn
+	}
+
+	// Crear tuberías anónimas entre procesos consecutivos
+	pipes := make([]*os.File, 0, 2*(n-1))
+	for i := 0; i < n-1; i++ {
+		pr, pw, err := os.Pipe()
+		if err != nil {
+			cerrarArchivos(archivos)
+			for _, p := range pipes {
+				p.Close()
+			}
+			return "", fmt.Errorf("no se pudo crear tuberia entre procesos: %w", err)
+		}
+		cmds[i].Stdout = pw
+		cmds[i+1].Stdin = pr
+		pipes = append(pipes, pr, pw)
+	}
+
+	// Asignar stdout del último proceso (si se abrió)
+	if fOut != nil {
+		cmds[n-1].Stdout = fOut
+	}
+
+	// Lanzar todos los procesos
+	for i, cmd := range cmds {
+		if err := cmd.Start(); err != nil {
+			// Matar los que ya arrancaron
+			for j := 0; j < i; j++ {
+				if cmds[j].Process != nil {
+					cmds[j].Process.Kill()
+				}
+			}
+			cerrarArchivos(archivos)
+			for _, p := range pipes {
+				p.Close()
+			}
+			//MarcarTerminado(idEjecucion, -1)
+			return "", fmt.Errorf("no se pudo ejecutar el programa: %s: %w", idProgramas[i], err)
+		}
+	}
+
+	// Registrar el grupo con todos los comandos
+	info := RegistrarProceso(idEjecucion, idProgramas[0], cmds)
 	_ = GuardarEjecucion(info)
 
-	// Goroutine monitor: espera que el proceso termine,
-	// cierra los archivos y actualiza el estado.
-	go func() {
-		err := cmd.Wait()
+	// Cerrar write-ends en el padre para que los hijos reciban EOF
+	for i := 0; i < n-1; i++ {
+		pipes[2*i+1].Close()
+	}
 
-		// Cerrar archivos después de que el proceso terminó
-		for _, f := range archivosAbiertos {
-			f.Close()
-		}
+	// Goroutine monitor: espera que TODOS terminen
+	go func() {
+		defer cerrarArchivos(archivos)
+		defer func() {
+			for i := 0; i < n-1; i++ {
+				pipes[2*i].Close() // cerrar read-ends
+			}
+		}()
 
 		codigoSalida := 0
-		if err != nil {
-			if exitErr, ok := err.(*exec.ExitError); ok {
-				codigoSalida = exitErr.ExitCode()
-			} else {
-				codigoSalida = -1
+		for i, cmd := range cmds {
+			err := cmd.Wait()
+			if err != nil {
+				if exitErr, ok := err.(*exec.ExitError); ok {
+					// Tomar el codigo del ultimo proceso (convencion Unix)
+					if i == n-1 {
+						codigoSalida = exitErr.ExitCode()
+					}
+				} else {
+					codigoSalida = -1
+				}
 			}
 		}
 		MarcarTerminado(idEjecucion, codigoSalida)
@@ -118,24 +183,54 @@ func LanzarProceso(idPrograma, idStdin, idStdout, idStderr string) (string, erro
 	return idEjecucion, nil
 }
 
-// MatarProceso termina forzosamente un proceso de lotes en ejecución.
+// MatarProceso termina forzosamente todos los procesos del pipeline.
 func MatarProceso(idEjecucion string) error {
 	info, err := ObtenerProceso(idEjecucion)
 	if err != nil {
 		return fmt.Errorf("proceso no encontrado")
 	}
-
 	info.mu.RLock()
 	terminado := info.Terminado
-	cmd := info.Cmd
+	cmds := info.Cmds
 	info.mu.RUnlock()
 
-	if terminado || cmd == nil || cmd.Process == nil {
+	if terminado || len(cmds) == 0 {
 		return fmt.Errorf("proceso no encontrado o ya terminado")
 	}
 
-	if err := cmd.Process.Kill(); err != nil {
-		return fmt.Errorf("no se pudo matar el proceso: %w", err)
+	// Matar todos los procesos del pipeline
+	for _, cmd := range cmds {
+		if cmd != nil && cmd.Process != nil {
+			cmd.Process.Kill()
+		}
 	}
+
+	// Marcar como terminado inmediatamente (código -1 indica "matado")
+	info.mu.Lock()
+	if !info.Terminado {
+		info.Estado = ProcesoTerminado
+		info.CodigoSalida = -1
+		info.Terminado = true
+		info.mu.Unlock()
+
+		// Decrementar contador de procesos activos
+		muProcesos.Lock()
+		contadorActivos--
+		activos := contadorActivos
+		muProcesos.Unlock()
+
+		// Si el servicio estaba en Parando y ya no hay activos, terminarlo
+		if activos == 0 {
+			servicio.mu.RLock()
+			parando := servicio.current == estadoParando
+			servicio.mu.RUnlock()
+			if parando {
+				TerminarServicio()
+			}
+		}
+	} else {
+		info.mu.Unlock()
+	}
+
 	return nil
 }

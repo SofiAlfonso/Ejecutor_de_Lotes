@@ -5,13 +5,14 @@ import "encoding/json"
 
 // Peticion representa el mensaje JSON entrante desde ctrllt.
 type Peticion struct {
-	Servicio    string `json:"servicio"`
-	Operacion   string `json:"operacion"`
-	IDPrograma  string `json:"id-programa,omitempty"`
-	IDEjecucion string `json:"id-ejecucion,omitempty"`
-	Stdin       string `json:"stdin,omitempty"`
-	Stdout      string `json:"stdout,omitempty"`
-	Stderr      string `json:"stderr,omitempty"`
+	Servicio    string   `json:"servicio"`
+	Operacion   string   `json:"operacion"`
+	Programas   []string `json:"programas,omitempty"`   // pipeline: lista de id-programa
+	IDPrograma  string   `json:"id-programa,omitempty"` // compatibilidad un solo programa
+	IDEjecucion string   `json:"id-ejecucion,omitempty"`
+	Stdin       string   `json:"stdin"`
+	Stdout      string   `json:"stdout"`
+	Stderr      string   `json:"stderr"`
 }
 
 // RespuestaProceso representa el estado de un proceso en la respuesta JSON.
@@ -19,7 +20,7 @@ type RespuestaProceso struct {
 	IDEjecucion   string `json:"id-ejecucion"`
 	IDPrograma    string `json:"id-programa"`
 	ProcesoEstado string `json:"proceso-estado"`
-	CodigoSalida  int    `json:"codigo-salida"` //CodigoSalida  int    `json:"codigo-salida,omitempty"`
+	CodigoSalida  *int   `json:"codigo-salida,omitempty"`
 }
 
 // Respuesta representa el mensaje JSON de salida hacia ctrllt.
@@ -64,6 +65,7 @@ func ProcesarPeticion(lineaJSON []byte) []byte {
 // --- operaciones individuales ---
 
 // opEjecutar lanza un nuevo proceso de lotes en background.
+// opEjecutar lanza un nuevo proceso de lotes en background.
 func opEjecutar(pet Peticion) []byte {
 	if !ServicioAceptaEjecuciones() {
 		if ServicioEstaTerminado() {
@@ -71,13 +73,17 @@ func opEjecutar(pet Peticion) []byte {
 		}
 		return errorJSON("servicio suspendido")
 	}
-	if pet.IDPrograma == "" {
-		return errorJSON("falta campo: id-programa")
+
+	// Normalizar: si viene id-programa solo, convertir a lista
+	if len(pet.Programas) == 0 && pet.IDPrograma != "" {
+		pet.Programas = []string{pet.IDPrograma}
 	}
-	if pet.Stdin == "" || pet.Stdout == "" || pet.Stderr == "" {
-		return errorJSON("faltan campos: stdin, stdout, stderr")
+	if len(pet.Programas) == 0 {
+		return errorJSON("falta campo: id-programa") // mensaje según enunciado
 	}
-	idEjecucion, err := LanzarProceso(pet.IDPrograma, pet.Stdin, pet.Stdout, pet.Stderr)
+	// stdin, stdout, stderr son opcionales (no se validan)
+
+	idEjecucion, err := LanzarPipeline(pet.Programas, pet.Stdin, pet.Stdout, pet.Stderr)
 	if err != nil {
 		return errorJSON(err.Error())
 	}
@@ -103,10 +109,10 @@ func opEstado(pet Peticion) []byte {
 				IDEjecucion:   info.IDEjecucion,
 				IDPrograma:    info.IDPrograma,
 				ProcesoEstado: string(info.Estado),
-				CodigoSalida:  info.CodigoSalida,
 			}
 			if info.Terminado {
-				r.CodigoSalida = info.CodigoSalida
+				cs := info.CodigoSalida
+				r.CodigoSalida = &cs
 			}
 			info.mu.RUnlock()
 			respuestas = append(respuestas, r)
@@ -129,7 +135,8 @@ func opEstado(pet Peticion) []byte {
 		ProcesoEstado: string(info.Estado),
 	}
 	if info.Terminado {
-		r.CodigoSalida = info.CodigoSalida
+		cs := info.CodigoSalida
+		r.CodigoSalida = &cs
 	}
 	info.mu.RUnlock()
 	return okJSON(Respuesta{
