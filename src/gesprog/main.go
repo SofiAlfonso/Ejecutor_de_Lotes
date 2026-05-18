@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+
+	"github.com/SofiAlfonso/Ejecutor_de_Lotes/src/common"
 )
 
 // main es el punto de entrada del servicio gesprog.
@@ -35,6 +37,7 @@ func main() {
 	}
 
 	// Inicializar almacenamiento
+	common.InitIDs(*aralmac)
 	if err := InicializarAlmacenamiento(*aralmac); err != nil {
 		log.Fatalf("gesprog: error inicializando aralmac: %v", err)
 	}
