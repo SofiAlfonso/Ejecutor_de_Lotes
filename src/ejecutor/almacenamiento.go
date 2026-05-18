@@ -92,25 +92,3 @@ func GuardarEjecucion(info *InfoProceso) error {
 	}
 	return os.WriteFile(ruta, data, 0644)
 }
-
-// generarIDEjecucion produce un nuevo ID e-XXXX.
-// TODO: reemplazar por common.GenerarIDEjecucion() cuando common/ids.go esté listo.
-func generarIDEjecucion() (string, error) {
-	dirEjecuciones := filepath.Join(rutaAralmac, "ejecuciones")
-	entradas, err := os.ReadDir(dirEjecuciones)
-	if err != nil {
-		return "e-0001", nil
-	}
-	maximo := 0
-	for _, e := range entradas {
-		nombre := e.Name()
-		if len(nombre) == 11 && nombre[:2] == "e-" && nombre[6:] == ".json" {
-			var n int
-			fmt.Sscanf(nombre[2:6], "%d", &n)
-			if n > maximo {
-				maximo = n
-			}
-		}
-	}
-	return fmt.Sprintf("e-%04d", maximo+1), nil
-}
