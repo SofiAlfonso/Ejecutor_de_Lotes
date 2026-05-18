@@ -1,8 +1,9 @@
-# ejecutor — Lanzador de cadenas de programas (lotes)
+
+# ejecutor — Servicio de ejecución de procesos de lotes
 
 ## Descripción
 
-`ejecutor` lanza **cadenas de programas** conectadas por tuberías anónimas, emulando el comportamiento de un shell: `p1 | p2 | p3`. Lee los binarios directamente desde `aralmac/programas/` y registra el estado de cada lote en `aralmac/lotes/`, sin pasar por `gesfich` ni `gesprog`.
+`ejecutor` lanza procesos de forma independiente en background, administra su ciclo de vida y persiste el estado de cada ejecución en `aralmac/ejecuciones/`. Lee los binarios directamente desde `aralmac/programas/` (gestionados por `gesprog`) y redirige stdin/stdout/stderr desde/hacia ficheros en `aralmac/ficheros/` (gestionados por `gesfich`).
 
 ## Sinopsis
 
@@ -12,70 +13,92 @@ ejecutor -e <pipe-req> [-d <pipe-res>] -x <ruta_aralmac>
 
 | Flag | Significado                                                     |
 |------|-----------------------------------------------------------------|
-| `-e` | Pipe de peticiones entrantes (desde ctrllt o cliente directo)   |
+| `-e` | Pipe de peticiones entrantes (lo crea `ejecutor` al arrancar)   |
 | `-d` | Pipe de respuestas salientes — solo en Linux (half‑duplex)      |
 | `-x` | Ruta raíz del almacenamiento (`aralmac/`)                       |
 
 ## Operaciones
 
-| Acción      | Descripción                                                                        | Retorna              |
-|-------------|------------------------------------------------------------------------------------|----------------------|
-| `ejecutar`  | Lanza la cadena de programas en background; retorna inmediatamente (no bloqueante) | `id_lote` (`l-XXXX`) |
-| `estado`    | Devuelve el estado de un lote específico o la lista de todos los lotes             | JSON del lote / lista |
-| `matar`     | Envía `SIGKILL` / `TerminateProcess` a **todos** los procesos hijos del lote       | `{ "id_lote", "estado": "matado", "message" }` |
-| `suspender` | Suspende el servicio (rechaza nuevos lotes y `matar`)                              | `{ "estado": "Suspendido", "procesos_activos": N }` |
-| `reasumir`  | Reanuda la aceptación de peticiones                                                | `{ "estado": "Corriendo", "procesos_activos": N }` |
-| `parar`     | Cierre elegante: espera que terminen los lotes activos, luego sale                 | `{ "estado": "Parando", "procesos_activos": N }` |
-| `terminar`  | Cierre inmediato: mata todos los procesos hijos y sale                             | `{ "estado": "Terminado", "procesos_activos": 0 }` |
+| Operación   | Descripción                                                                           | Retorna                        |
+|-------------|---------------------------------------------------------------------------------------|--------------------------------|
+| `Ejecutar`  | Lanza el programa en background; retorna inmediatamente sin esperar que termine       | `{ "id-ejecucion": "e-XXXX" }` |
+| `Estado`    | Devuelve el estado de una ejecución específica o la lista de todas las ejecuciones    | JSON de la ejecución / lista   |
+| `Matar`     | Termina forzosamente un proceso en ejecución (`Process.Kill`)                         | `{ "estado": "ok" }`           |
+| `Suspender` | Suspende el servicio; rechaza nuevos `Ejecutar`, los procesos activos siguen corriendo | `{ "estado": "ok" }`          |
+| `Reasumir`  | Reanuda la aceptación de peticiones desde estado `Suspendido`                         | `{ "estado": "ok" }`           |
+| `Parar`     | Cierre ordenado: deja de aceptar `Ejecutar`, espera que terminen los procesos activos | `{ "estado": "ok" }`           |
 
-### Payload de `ejecutar`
+### Payload de `Ejecutar`
 
 ```json
 {
-  "id_fichero_entrada": "f-0001",
-  "programas": ["p-0002", "p-0003", "p-0004"],
-  "id_fichero_salida":  "f-0007"
+  "servicio":    "ejecutor",
+  "operacion":   "Ejecutar",
+  "id-programa": "p-0001",
+  "stdin":       "f-0001",
+  "stdout":      "f-0002",
+  "stderr":      "f-0003"
 }
 ```
 
-- `programas`: array con uno o más IDs de programa en orden de ejecución.
-- `id_fichero_entrada` e `id_fichero_salida` son obligatorios y deben existir en `aralmac`.
-- Si cualquier programa o fichero no existe → `NOT_FOUND`. No se lanza ningún proceso.
-- Incrementa `refcount` de los ficheros de entrada y salida antes de lanzar.
-- Retorna `id_lote` inmediatamente; la terminación se detecta vía un hilo monitor.
+- `id-programa`: obligatorio. Debe existir como `p-XXXX.bin` y `p-XXXX.json` en `aralmac/programas/`.
+- `stdin`, `stdout`, `stderr`: opcionales. Si se especifican, deben existir como `f-XXXX.dat` en `aralmac/ficheros/`.
+- Si el programa o algún fichero no existe → `{ "estado": "error", "mensaje": "..." }`. No se lanza ningún proceso.
+
+### Payload de `Estado`
+
+```json
+{ "servicio": "ejecutor", "operacion": "Estado" }
+```
+```json
+{ "servicio": "ejecutor", "operacion": "Estado", "id-ejecucion": "e-0001" }
+```
+
+- Sin `id-ejecucion` → lista todas las ejecuciones registradas en la sesión.
+- Con `id-ejecucion` → devuelve el estado individual.
+
+### Payload de `Matar`
+
+```json
+{ "servicio": "ejecutor", "operacion": "Matar", "id-ejecucion": "e-0001" }
+```
+
+- Si el proceso ya terminó → `{ "estado": "error", "mensaje": "proceso no encontrado o ya terminado" }`.
 
 ## Estados del servicio
 
 ```
-[Corriendo] ──suspender──> [Suspendido] ──reasumir──> [Corriendo]
-    │                           │
-    └────parar────> [Parando] ──(procesos_activos==0)──> [Terminado]
+[Ejecutar] ──Suspender──> [Suspendido] ──Reasumir──> [Ejecutar]
     │
-    └────terminar─────────────────────────────────> [Terminado]
+    └────Parar────> [Parando] ──(procesos_activos==0)──> [Terminado]
 ```
 
-- **Corriendo:** acepta todas las operaciones.
-- **Suspendido:** rechaza `ejecutar` y `matar` con `SERVICE_SUSPENDED`; acepta `estado`. Los lotes ya en ejecución continúan normalmente.
-- **Parando:** rechaza `ejecutar` y `matar`; acepta `estado`. Termina automáticamente cuando no quedan lotes activos.
-- **Terminado:** no acepta ninguna operación.
+| Estado       | Acepta `Ejecutar` | Acepta `Estado`/`Matar` | Descripción                                      |
+|--------------|:-----------------:|:-----------------------:|--------------------------------------------------|
+| `Ejecutar`   | ✅                | ✅                      | Estado inicial. Acepta todas las operaciones.    |
+| `Suspendido` | ❌                | ✅                      | Rechaza nuevas ejecuciones. Procesos siguen.     |
+| `Parando`    | ❌                | ✅                      | Espera que los procesos activos terminen.        |
+| `Terminado`  | ❌                | ❌                      | Servicio finalizado. No acepta ninguna petición. |
 
-## Estados de un lote
+## Estados de una ejecución
+
+| Estado       | Descripción                                                        |
+|--------------|--------------------------------------------------------------------|
+| `Ejecutando` | El proceso hijo sigue en ejecución.                                |
+| `Terminado`  | El proceso terminó. El campo `codigo-salida` indica el resultado.  |
+
+## Persistencia
 
 ```
-corriendo → terminado
-corriendo → fallido
-corriendo → matado
+aralmac/
+├── programas/
+│   ├── p-0001.bin       ← binario gestionado por gesprog
+│   └── p-0001.json      ← { "id-programa", "nombre", "args", "env" }
+├── ficheros/
+│   └── f-0001.dat       ← fichero gestionado por gesfich
+└── ejecuciones/
+    └── e-0001.json      ← { "id-ejecucion", "id-programa", "proceso-estado", "codigo-salida", "terminado" }
 ```
 
-| Estado      | Descripción                                                              |
-|-------------|--------------------------------------------------------------------------|
-| `corriendo` | Al menos un proceso hijo del lote sigue en ejecución                     |
-| `terminado` | Todos los procesos hijos terminaron con código de salida 0               |
-| `fallido`   | Algún proceso terminó con código de salida distinto de 0                 |
-| `matado`    | El lote fue terminado forzosamente por la operación `matar`              |
+El archivo `e-XXXX.json` se escribe dos veces: al lanzar el proceso (estado `Ejecutando`) y al terminar (estado `Terminado` con código de salida).
 
-## Gestión de la cadena de procesos
-
-- **Linux:** `pipe()` para tuberías anónimas, `fork()` + `dup2()` + `execvp()` para cada programa.
-- **Windows:** `CreatePipe()` para tuberías anónimas, `CreateProcess()` con `STARTUPINFO` para redirigir `hStdInput`/`hStdOutput`.
-- Un hilo monitor espera con `waitpid` / `WaitForMultipleObjects` la terminación de todos los hijos; al terminar el último actualiza el estado del lote y decrementa `refcount` de los ficheros.
